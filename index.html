@@ -1,0 +1,590 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Long Exposure Calculator</title>
+  <style>
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+:root {
+  --bg:      #14110e;
+  --card:    #1e1a16;
+  --line:    #332c24;
+  --ink:     #ece4d6;
+  --dim:     #9a8d7c;
+  --brass:   #b8893b;
+  --brass-d: #8a6729;
+  --warn:    #c9873f;
+}
+
+html, body {
+  background: var(--bg);
+  color: var(--ink);
+  font-family: system-ui, -apple-system, 'Segoe UI', sans-serif;
+  font-size: 16px;
+  line-height: 1.5;
+  -webkit-text-size-adjust: 100%;
+}
+
+.wrap { max-width: 30rem; margin: 0 auto; padding: 1.25rem 1rem 3rem; }
+
+header { text-align: center; margin-bottom: 1.5rem; }
+h1 { font-size: 1.5rem; font-weight: 700; letter-spacing: 0.01em; }
+.sub { color: var(--dim); font-size: 0.85rem; margin-top: 0.25rem; }
+
+.card {
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 1rem 1.1rem;
+  margin-bottom: 1rem;
+}
+
+h2 {
+  font-size: 0.75rem;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--brass);
+  margin-bottom: 0.9rem;
+}
+
+/* ── Fields ─────────────────────────────────────────────────────── */
+.field { display: block; margin-bottom: 0.85rem; }
+.field > span {
+  display: block;
+  font-size: 0.8rem;
+  color: var(--dim);
+  margin-bottom: 0.3rem;
+}
+
+select, input[type="number"] {
+  width: 100%;
+  padding: 0.65rem 0.75rem;
+  background: #171310;
+  color: var(--ink);
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  font-size: 1.05rem;
+  font-family: inherit;
+  appearance: none;
+}
+select:focus, input:focus { outline: none; border-color: var(--brass); }
+
+.prefix-input { display: flex; align-items: stretch; }
+.prefix {
+  display: flex;
+  align-items: center;
+  padding: 0 0.7rem;
+  background: #171310;
+  border: 1px solid var(--line);
+  border-right: none;
+  border-radius: 7px 0 0 7px;
+  color: var(--dim);
+  font-size: 1.05rem;
+}
+.prefix-input input { border-radius: 0 7px 7px 0; }
+
+.hint { font-size: 0.75rem; color: var(--dim); margin-top: -0.4rem; }
+.hint.warn { color: var(--warn); }
+.hidden { display: none; }
+
+/* ── Segmented control ──────────────────────────────────────────── */
+.seg { display: flex; gap: 0.4rem; margin-bottom: 0.9rem; }
+.seg-btn {
+  flex: 1;
+  padding: 0.55rem 0.4rem;
+  background: #171310;
+  color: var(--dim);
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  font-size: 0.85rem;
+  font-family: inherit;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+.seg-btn.active { background: var(--brass); border-color: var(--brass); color: #241c12; font-weight: 600; }
+
+/* ── Result ─────────────────────────────────────────────────────── */
+.result { text-align: center; border-color: var(--brass-d); }
+.result-label {
+  font-size: 0.75rem;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--dim);
+}
+.result-time {
+  font-size: 3rem;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  color: var(--brass);
+  line-height: 1.15;
+  margin: 0.2rem 0;
+  word-break: break-word;
+}
+.result-note { font-size: 0.8rem; color: var(--dim); min-height: 1.2em; }
+
+.timer-btn {
+  margin-top: 0.9rem;
+  padding: 0.7rem 1.6rem;
+  background: transparent;
+  color: var(--brass);
+  border: 1px solid var(--brass-d);
+  border-radius: 8px;
+  font-size: 0.95rem;
+  font-family: inherit;
+  font-weight: 600;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+.timer-btn.running { background: var(--brass); color: #241c12; }
+.timer-btn:disabled { opacity: 0.35; }
+
+.countdown {
+  font-size: 2.6rem;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  margin-top: 0.6rem;
+}
+.countdown.done { color: var(--warn); }
+
+/* ── Working ────────────────────────────────────────────────────── */
+.working summary {
+  cursor: pointer;
+  font-size: 0.8rem;
+  color: var(--dim);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+.working table { width: 100%; margin-top: 0.8rem; border-collapse: collapse; font-size: 0.85rem; }
+.working td { padding: 0.35rem 0; border-bottom: 1px solid var(--line); vertical-align: top; }
+.working td:first-child { color: var(--dim); padding-right: 0.8rem; }
+.working td:last-child { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.working tr:last-child td { border-bottom: none; font-weight: 700; color: var(--brass); }
+
+footer { text-align: center; margin-top: 1.5rem; }
+footer p { font-size: 0.72rem; color: var(--dim); }
+
+/* ── Added 08-17: two-up rows, dividers, standalone labels ──────── */
+.row { display: flex; gap: 0.6rem; }
+.row .field { flex: 1; min-width: 0; }
+
+.divider { height: 1px; background: var(--line); margin: 0.4rem 0 0.9rem; }
+
+.field-label {
+  display: block;
+  font-size: 0.8rem;
+  color: var(--dim);
+  margin-bottom: 0.3rem;
+}
+
+/* Three-way segment needs to survive small screens */
+.seg { flex-wrap: wrap; }
+.seg-btn { min-width: 6rem; }
+
+.hint em { color: var(--ink); font-style: italic; }
+.hint sub, .hint sup { font-size: 0.7em; }
+
+</style>
+</head>
+<body>
+
+<div class="wrap">
+
+  <header>
+    <h1>Long Exposure</h1>
+    <p class="sub">Meter normally &rarr; get your real exposure time, reciprocity included.</p>
+  </header>
+
+  <!-- ── 1. The reading ──────────────────────────────────────────── -->
+  <section class="card">
+    <h2>1 &middot; Your meter reading</h2>
+
+    <div class="row">
+      <label class="field">
+        <span>Shutter speed</span>
+        <select id="shutter"></select>
+      </label>
+      <label class="field">
+        <span>At aperture</span>
+        <select id="baseAperture"></select>
+      </label>
+    </div>
+
+    <label class="field">
+      <span>Metered at ISO</span>
+      <input id="meterIso" type="number" min="1" step="1" value="100" inputmode="numeric" />
+    </label>
+    <p class="hint">Whatever your meter or phone app was actually set to.</p>
+  </section>
+
+  <!-- ── 2. The camera ───────────────────────────────────────────── -->
+  <section class="card">
+    <h2>2 &middot; Your camera</h2>
+
+    <div class="seg" id="fMode">
+      <button type="button" class="seg-btn active" data-mode="direct">Know my f-number</button>
+      <button type="button" class="seg-btn" data-mode="derive">Work it out</button>
+    </div>
+
+    <div id="directPane">
+      <label class="field">
+        <span>Pinhole aperture</span>
+        <div class="prefix-input">
+          <span class="prefix">f/</span>
+          <input id="targetF" type="number" min="1" step="1" value="175" inputmode="numeric" />
+        </div>
+      </label>
+    </div>
+
+    <div id="derivePane" class="hidden">
+      <div class="row">
+        <label class="field">
+          <span>Focal length (mm)</span>
+          <input id="focal" type="number" min="1" step="0.1" value="50" inputmode="decimal" />
+        </label>
+        <label class="field">
+          <span>Pinhole &oslash; (mm)</span>
+          <input id="diameter" type="number" min="0.01" step="0.01" value="0.3" inputmode="decimal" />
+        </label>
+      </div>
+      <p class="hint">Focal length &divide; diameter = <strong id="derivedF">f/167</strong></p>
+    </div>
+  </section>
+
+  <!-- ── 3. The medium ───────────────────────────────────────────── -->
+  <section class="card">
+    <h2>3 &middot; Your medium</h2>
+
+    <label class="field">
+      <span>Medium ISO</span>
+      <input id="mediumIso" type="number" min="0.1" step="0.1" value="400" inputmode="decimal" />
+    </label>
+    <p class="hint" id="isoNote">Film, paper, X-ray, whatever you're shooting. Paper negatives are often ISO 3&ndash;12.</p>
+
+    <div class="divider"></div>
+
+    <span class="field-label">Reciprocity</span>
+    <div class="seg" id="recipMode">
+      <button type="button" class="seg-btn active" data-mode="pair">From a datasheet</button>
+      <button type="button" class="seg-btn" data-mode="expo">I know the exponent</button>
+      <button type="button" class="seg-btn" data-mode="none">None</button>
+    </div>
+
+    <div id="pairPane">
+      <div class="row">
+        <label class="field">
+          <span>Metered (s)</span>
+          <input id="pairFrom" type="number" min="1.1" step="1" value="10" inputmode="decimal" />
+        </label>
+        <label class="field">
+          <span>Datasheet says (s)</span>
+          <input id="pairTo" type="number" min="1" step="1" value="20" inputmode="decimal" />
+        </label>
+      </div>
+      <p class="hint">
+        Most datasheets give a table &mdash; <em>&ldquo;indicated 10&nbsp;s, give 20&nbsp;s.&rdquo;</em>
+        Enter one row of it. Works out to <strong id="derivedP">^1.30</strong>.
+      </p>
+    </div>
+
+    <div id="expoPane" class="hidden">
+      <label class="field">
+        <span>Schwarzschild exponent</span>
+        <input id="expo" type="number" min="1" max="2" step="0.01" value="1.30" inputmode="decimal" />
+      </label>
+      <p class="hint">t<sub>corrected</sub> = t<sub>metered</sub><sup>p</sup>. Only if you already think this way.</p>
+    </div>
+
+    <div id="nonePane" class="hidden">
+      <p class="hint">No reciprocity correction &mdash; correct for digital sensors.</p>
+    </div>
+
+    <div class="divider"></div>
+
+    <label class="field">
+      <span>Filter</span>
+      <select id="filter"></select>
+    </label>
+  </section>
+
+  <!-- ── The answer ──────────────────────────────────────────────── -->
+  <section class="card result" id="resultCard">
+    <div class="result-label">Expose for</div>
+    <div class="result-time" id="answer">&mdash;</div>
+    <div class="result-note" id="answerNote"></div>
+
+    <button type="button" id="timerBtn" class="timer-btn">Start timer</button>
+    <div class="countdown hidden" id="countdown">0.0</div>
+  </section>
+
+  <!-- ── Show the working ────────────────────────────────────────── -->
+  <details class="card working">
+    <summary>Show the working</summary>
+    <table id="steps"></table>
+  </details>
+
+  <footer>
+    <p>Proof of concept &middot; all maths runs in your browser, nothing is sent anywhere.</p>
+  </footer>
+
+</div>
+
+<script>
+(() => {
+  'use strict';
+
+  // ── Data ────────────────────────────────────────────────────────────────
+  const SHUTTERS = [
+    [1 / 4000, '1/4000'], [1 / 2000, '1/2000'], [1 / 1000, '1/1000'],
+    [1 / 500, '1/500'], [1 / 250, '1/250'], [1 / 125, '1/125'],
+    [1 / 60, '1/60'], [1 / 30, '1/30'], [1 / 15, '1/15'],
+    [1 / 8, '1/8'], [1 / 4, '1/4'], [1 / 2, '1/2'],
+    [1, '1 s'], [2, '2 s'], [4, '4 s'], [8, '8 s'], [15, '15 s'], [30, '30 s'],
+  ];
+
+  const APERTURES = [1.4, 2, 2.8, 4, 5.6, 8, 11, 16, 22, 32];
+
+  // Filters by the only thing that actually matters — how many stops they eat.
+  // Examples are illustrative; real factors vary by manufacturer, which is
+  // precisely why the stop value is the input and the name is only a hint.
+  // Colour examples run out around +3; past that only ND makes sense.
+  const FILTERS = [
+    [0,  'None'],
+    [1,  '+1  ·  yellow, or ND 0.3 / ND2'],
+    [2,  '+2  ·  orange or green, or ND 0.6 / ND4'],
+    [3,  '+3  ·  red, or ND 0.9 / ND8'],
+    [4,  '+4  ·  ND 1.2 / ND16'],
+    [5,  '+5  ·  ND 1.5 / ND32'],
+    [6,  '+6  ·  ND 1.8 / ND64'],
+    [7,  '+7  ·  ND 2.1 / ND128'],
+    [8,  '+8  ·  ND 2.4 / ND256'],
+    [9,  '+9  ·  ND 2.7 / ND512'],
+    [10, '+10 ·  ND 3.0 / ND1000'],
+  ];
+
+  // Reciprocity failure only bites once exposures get long; below this the
+  // correction is noise and applying it would misrepresent short readings.
+  const RECIPROCITY_THRESHOLD_S = 1;
+
+  // ── Elements ────────────────────────────────────────────────────────────
+  const $ = (id) => document.getElementById(id);
+  const els = {};
+  ['shutter','baseAperture','meterIso','targetF','focal','diameter','derivedF',
+   'mediumIso','isoNote','pairFrom','pairTo','derivedP','expo','filter',
+   'answer','answerNote','steps','directPane','derivePane','fMode',
+   'recipMode','pairPane','expoPane','nonePane','timerBtn','countdown']
+    .forEach((k) => { els[k] = $(k); });
+
+  let fMode = 'direct';
+  let recipMode = 'pair';
+
+  // ── Populate ────────────────────────────────────────────────────────────
+  SHUTTERS.forEach(([v, label]) => els.shutter.add(new Option(label, String(v))));
+  els.shutter.value = String(1 / 60);
+
+  APERTURES.forEach((a) => els.baseAperture.add(new Option('f/' + a, String(a))));
+  els.baseAperture.value = '22';
+
+  FILTERS.forEach(([stops, label]) => els.filter.add(new Option(label, String(stops))));
+
+  // ── Maths ───────────────────────────────────────────────────────────────
+  // Each stop is a factor of root-2 in f-number, hence 2 * log2(ratio).
+  const apertureStops = (from, to) => 2 * Math.log2(to / from);
+
+  // A slower medium than the meter was set to needs more light: positive stops.
+  const isoStops = (meterIso, mediumIso) => Math.log2(meterIso / mediumIso);
+
+  // Datasheets publish tables ("indicated 10s, give 20s"), not exponents.
+  // t_corrected = t_metered^p  =>  p = ln(corrected) / ln(metered).
+  // Undefined at metered = 1 (ln 1 = 0), so the reference must be above it.
+  function exponentFromPair(from, to) {
+    if (!(from > 1) || !(to > 0)) return NaN;
+    return Math.log(to) / Math.log(from);
+  }
+
+  function currentExponent() {
+    if (recipMode === 'none') return 1;
+    if (recipMode === 'expo') return parseFloat(els.expo.value);
+    return exponentFromPair(parseFloat(els.pairFrom.value), parseFloat(els.pairTo.value));
+  }
+
+  function currentTargetF() {
+    if (fMode === 'direct') return parseFloat(els.targetF.value);
+    const focal = parseFloat(els.focal.value);
+    const dia = parseFloat(els.diameter.value);
+    if (!Number.isFinite(focal) || !Number.isFinite(dia) || dia <= 0) return NaN;
+    return focal / dia;
+  }
+
+  function compute() {
+    const shutter   = parseFloat(els.shutter.value);
+    const baseF     = parseFloat(els.baseAperture.value);
+    const meterIso  = parseFloat(els.meterIso.value);
+    const mediumIso = parseFloat(els.mediumIso.value);
+    const targetF   = currentTargetF();
+    const p         = currentExponent();
+    const fStops    = parseFloat(els.filter.value);
+
+    const ok = [shutter, baseF, meterIso, mediumIso, targetF, p, fStops].every(Number.isFinite);
+    if (!ok || targetF <= 0 || baseF <= 0 || meterIso <= 0 || mediumIso <= 0 || p < 1) return null;
+
+    const apStops  = apertureStops(baseF, targetF);
+    const isStops  = isoStops(meterIso, mediumIso);
+    const totalStops = apStops + isStops + fStops;
+
+    // All light losses combine first; reciprocity is then a function of the
+    // resulting real-world duration, so it must be applied last.
+    const beforeReciprocity = shutter * Math.pow(2, totalStops);
+    const applies = beforeReciprocity > RECIPROCITY_THRESHOLD_S && p > 1;
+    const final = applies ? Math.pow(beforeReciprocity, p) : beforeReciprocity;
+
+    return { shutter, baseF, meterIso, mediumIso, targetF, p, fStops,
+             apStops, isStops, totalStops, beforeReciprocity, final, applies };
+  }
+
+  // ── Formatting ──────────────────────────────────────────────────────────
+  // Always round to the precision being displayed BEFORE splitting into units,
+  // and pick the unit from the rounded value. The previous version floored the
+  // whole unit but rounded the remainder separately, so the remainder could
+  // reach a full unit with nothing to carry it: 119.7s rendered as "1 min 60 s"
+  // and 7199.7s as "1 h 60 min". Because the window is half a second in every
+  // minute, it got MORE likely the longer the exposure — the wrong direction
+  // for this tool. (2026-08-17)
+  function formatSeconds(s) {
+    if (!Number.isFinite(s)) return '—';
+    if (s < 1) return s.toFixed(2) + ' s';
+    // Compare on the rounded value, else 59.96 renders as "60.0 s".
+    if (Math.round(s * 10) / 10 < 60) return s.toFixed(1) + ' s';
+
+    const total = Math.round(s);                       // whole seconds
+    if (total < 3600) {
+      const m = Math.floor(total / 60), r = total - m * 60;
+      return r ? `${m} min ${r} s` : `${m} min`;
+    }
+    const mins = Math.round(total / 60);               // whole minutes
+    const h = Math.floor(mins / 60), m = mins - h * 60;
+    return m ? `${h} h ${m} min` : `${h} h`;
+  }
+
+  const signed = (n) => (n >= 0 ? '+' : '−') + Math.abs(n).toFixed(2);
+
+  // ── Render ──────────────────────────────────────────────────────────────
+  function render() {
+    if (fMode === 'derive') {
+      const f = currentTargetF();
+      els.derivedF.textContent = Number.isFinite(f) ? 'f/' + f.toFixed(0) : '—';
+    }
+    if (recipMode === 'pair') {
+      const p = exponentFromPair(parseFloat(els.pairFrom.value), parseFloat(els.pairTo.value));
+      els.derivedP.textContent = Number.isFinite(p) ? '^' + p.toFixed(2) : 'not valid — metered must be over 1 s';
+    }
+
+    const r = compute();
+    if (!r) {
+      els.answer.textContent = '—';
+      els.answerNote.textContent = 'Check your inputs.';
+      els.steps.innerHTML = '';
+      els.timerBtn.disabled = true;
+      return;
+    }
+
+    els.answer.textContent = formatSeconds(r.final);
+    els.timerBtn.disabled = false;
+    els.answerNote.textContent = r.applies
+      ? `Reciprocity added ${formatSeconds(r.final - r.beforeReciprocity)} on top.`
+      : (r.p > 1 ? 'Too short for reciprocity to matter.' : 'No reciprocity correction.');
+
+    const rows = [
+      ['Metered', `${els.shutter.selectedOptions[0].text} @ f/${r.baseF}, ISO ${r.meterIso}`],
+      [`Aperture &rarr; f/${r.targetF.toFixed(0)}`, `${signed(r.apStops)} stops`],
+    ];
+    if (Math.abs(r.isStops) > 0.005) {
+      rows.push([`ISO ${r.meterIso} &rarr; ${r.mediumIso}`, `${signed(r.isStops)} stops`]);
+    }
+    if (r.fStops) rows.push(['Filter', `${signed(r.fStops)} stops`]);
+    rows.push(['Total light loss', `${signed(r.totalStops)} stops (×${Math.pow(2, r.totalStops).toFixed(1)})`]);
+    rows.push(['Before reciprocity', formatSeconds(r.beforeReciprocity)]);
+    if (r.applies) rows.push([`Reciprocity ^${r.p.toFixed(2)}`, formatSeconds(r.final)]);
+    rows.push(['Expose for', formatSeconds(r.final)]);
+
+    els.steps.innerHTML = rows.map(([k, v]) => `<tr><td>${k}</td><td>${v}</td></tr>`).join('');
+  }
+
+  // ── Timer ───────────────────────────────────────────────────────────────
+  // Wall-clock based, not tick-counting — a 20-minute exposure must not drift.
+  let timer = null;
+
+  function stopTimer() {
+    if (timer) { cancelAnimationFrame(timer.raf); timer = null; }
+    els.timerBtn.textContent = 'Start timer';
+    els.timerBtn.classList.remove('running');
+    els.countdown.classList.add('hidden');
+    els.countdown.classList.remove('done');
+  }
+
+  els.timerBtn.addEventListener('click', () => {
+    if (timer) { stopTimer(); return; }
+    const r = compute();
+    if (!r) return;
+
+    timer = { endsAt: performance.now() + r.final * 1000, raf: 0 };
+    els.timerBtn.textContent = 'Cancel';
+    els.timerBtn.classList.add('running');
+    els.countdown.classList.remove('hidden', 'done');
+
+    const tick = () => {
+      const left = (timer.endsAt - performance.now()) / 1000;
+      if (left <= 0) {
+        els.countdown.textContent = 'CLOSE';
+        els.countdown.classList.add('done');
+        els.timerBtn.textContent = 'Start timer';
+        els.timerBtn.classList.remove('running');
+        if (navigator.vibrate) navigator.vibrate([200, 100, 200]);
+        timer = null;
+        return;
+      }
+      els.countdown.textContent = left >= 60 ? formatSeconds(left) : left.toFixed(1);
+      timer.raf = requestAnimationFrame(tick);
+    };
+    tick();
+  });
+
+  // ── Wiring ──────────────────────────────────────────────────────────────
+  function wireSegments(container, onPick) {
+    container.addEventListener('click', (e) => {
+      const btn = e.target.closest('.seg-btn');
+      if (!btn) return;
+      container.querySelectorAll('.seg-btn').forEach((b) => b.classList.toggle('active', b === btn));
+      onPick(btn.dataset.mode);
+      render();
+    });
+  }
+
+  wireSegments(els.fMode, (mode) => {
+    fMode = mode;
+    els.directPane.classList.toggle('hidden', mode !== 'direct');
+    els.derivePane.classList.toggle('hidden', mode !== 'derive');
+  });
+
+  wireSegments(els.recipMode, (mode) => {
+    recipMode = mode;
+    els.pairPane.classList.toggle('hidden', mode !== 'pair');
+    els.expoPane.classList.toggle('hidden', mode !== 'expo');
+    els.nonePane.classList.toggle('hidden', mode !== 'none');
+  });
+
+  ['shutter','baseAperture','meterIso','targetF','focal','diameter',
+   'mediumIso','pairFrom','pairTo','expo','filter'].forEach((k) => {
+    els[k].addEventListener('input', render);
+    els[k].addEventListener('change', render);
+  });
+
+  render();
+})();
+
+</script>
+</body>
+</html>
+
