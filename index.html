@@ -481,12 +481,16 @@ footer p { font-size: 0.72rem; color: var(--dim); }
       els.derivedP.textContent = Number.isFinite(p) ? '^' + p.toFixed(2) : 'not valid — metered must be over 1 s';
     }
 
+    persist();
+
     const r = compute();
     if (!r) {
       els.answer.textContent = '—';
       els.answerNote.textContent = 'Check your inputs.';
       els.steps.innerHTML = '';
-      els.timerBtn.disabled = true;
+      // Never disable the button out from under a running exposure — that
+      // would leave no way to cancel it.
+      els.timerBtn.disabled = !timer;
       return;
     }
 
@@ -512,79 +516,270 @@ footer p { font-size: 0.72rem; color: var(--dim); }
     els.steps.innerHTML = rows.map(([k, v]) => `<tr><td>${k}</td><td>${v}</td></tr>`).join('');
   }
 
+  // ── State ───────────────────────────────────────────────────────────────
+  // Every input is persisted, for one reason: on a phone a backgrounded tab
+  // gets discarded and reloaded with blank defaults. Wil hit this in the field
+  // — "look away and come back and it would need to be reloaded, losing the
+  // settings it had" (2026-08-18). Losing eleven carefully entered values at a
+  // shooting location is the difference between a tool and a toy.
+  //
+  // Two layers, because this file has two lives:
+  //   localStorage — reliable over https (the GitHub Pages copy), and quietly
+  //                  unavailable in some browsers when the file is opened
+  //                  straight off disk as file://.
+  //   the URL hash — works everywhere, needs no permission, survives a reload
+  //                  by definition, and doubles as a shareable setup link.
+  // The hash is also a record of what the tool actually used, which is exactly
+  // the hole that made Test 6's bad input unrecoverable (2026-08-17).
+  const FIELDS = {
+    sh: 'shutter', ba: 'baseAperture', mi: 'meterIso',
+    tf: 'targetF', fl: 'focal', di: 'diameter',
+    mo: 'mediumIso', pf: 'pairFrom', pt: 'pairTo', ex: 'expo', ft: 'filter',
+  };
+  const STORE_KEY = 'long-exposure-calculator/v1';
+
+  // Browsers refuse history.replaceState on some file:// origins. Test it
+  // rather than assume — assigning location.hash works everywhere but adds a
+  // history entry every time, so where replaceState is unavailable the hash is
+  // saved only at the moments that matter instead of on every keystroke.
+  const canReplaceState = (() => {
+    try { history.replaceState(history.state, '', location.href); return true; }
+    catch (err) { return false; }
+  })();
+
+  function collectState() {
+    const state = { fm: fMode, rm: recipMode };
+    for (const [key, id] of Object.entries(FIELDS)) state[key] = els[id].value;
+    return state;
+  }
+
+  function applyState(state) {
+    if (!state) return;
+    if (state.fm) applyFMode(state.fm);
+    if (state.rm) applyRecipMode(state.rm);
+    for (const [key, id] of Object.entries(FIELDS)) {
+      const value = state[key];
+      if (value === undefined || value === '') continue;
+      const el = els[id];
+      const before = el.value;
+      el.value = value;
+      // A <select> silently goes blank when handed a value it has no option
+      // for, which would present as "Check your inputs" on a restore. Keep the
+      // default instead of surfacing a stale saved value as a broken form.
+      if (el.tagName === 'SELECT' && el.value === '') el.value = before;
+    }
+  }
+
+  function saveLocal(state) {
+    try { localStorage.setItem(STORE_KEY, JSON.stringify(state)); }
+    catch (err) { /* private mode, file://, or quota — the hash still covers us */ }
+  }
+
+  function loadLocal() {
+    try { return JSON.parse(localStorage.getItem(STORE_KEY)); }
+    catch (err) { return null; }
+  }
+
+  function writeHash(state) {
+    const query = new URLSearchParams(state).toString();
+    if (canReplaceState) history.replaceState(history.state, '', '#' + query);
+    else location.hash = query;
+  }
+
+  function readHash() {
+    const raw = location.hash.replace(/^#/, '');
+    if (!raw) return null;
+    const state = {};
+    for (const [key, value] of new URLSearchParams(raw)) state[key] = value;
+    return Object.keys(state).length ? state : null;
+  }
+
+  let hashDebounce = null;
+  function persist() {
+    saveLocal(collectState());
+    if (!canReplaceState) return;          // don't flood the back button
+    clearTimeout(hashDebounce);
+    hashDebounce = setTimeout(() => writeHash(collectState()), 1000);
+  }
+
+  // The last reliable moment before a phone discards a backgrounded tab.
+  function persistNow() {
+    const state = collectState();
+    saveLocal(state);
+    clearTimeout(hashDebounce);
+    writeHash(state);
+    saveTimer();
+  }
+
   // ── Timer ───────────────────────────────────────────────────────────────
   // Wall-clock based, not tick-counting — a 20-minute exposure must not drift.
-  let timer = null;
+  //
+  // Driven by Date.now() rather than performance.now(), and with three
+  // independent ways to notice the end, because the old requestAnimationFrame
+  // loop had a quiet failure worse than anything else in this tool: browsers
+  // PAUSE rAF on a hidden tab, so when the exposure finished with the phone in
+  // a pocket, CLOSE and the vibrate never fired at all. You came back to a
+  // countdown that jumped straight to CLOSE, long after the fact, having said
+  // nothing at the moment it mattered. (2026-08-18)
+  //
+  //   rAF              — smooth display, only while visible.
+  //   setTimeout       — fires the alarm while hidden. Background throttling
+  //                      can make it late; it cannot make it never.
+  //   visibilitychange — catches up the instant the screen comes back.
+  //
+  // An OS can still freeze a hidden tab outright, so lateness stays possible
+  // and the display SAYS SO rather than pretending. Keeping the screen awake
+  // is what prevents it, and that is a separate piece of work.
+  const TIMER_KEY = STORE_KEY + '/timer';
+  // setTimeout overflows past 2^31-1 ms (~24.8 days) and fires immediately.
+  // Not hypothetical for this tool — it produced a 34-year exposure on 08-17.
+  const MAX_TIMEOUT = 2147483647;
+
+  let timer = null;   // { endsAt: epoch ms, raf, alarm }
+
+  function saveTimer() {
+    try {
+      if (timer) localStorage.setItem(TIMER_KEY, String(timer.endsAt));
+      else localStorage.removeItem(TIMER_KEY);
+    } catch (err) { /* storage unavailable — the timer just won't survive a reload */ }
+  }
+
+  function clearTimer() {
+    if (timer) { cancelAnimationFrame(timer.raf); clearTimeout(timer.alarm); }
+    timer = null;
+    saveTimer();
+  }
 
   function stopTimer() {
-    if (timer) { cancelAnimationFrame(timer.raf); timer = null; }
+    clearTimer();
     els.timerBtn.textContent = 'Start timer';
     els.timerBtn.classList.remove('running');
     els.countdown.classList.add('hidden');
     els.countdown.classList.remove('done');
   }
 
+  function fireAlarm(endsAt) {
+    const lateBy = (Date.now() - endsAt) / 1000;
+    clearTimer();
+    els.timerBtn.textContent = 'Start timer';
+    els.timerBtn.classList.remove('running');
+    els.countdown.classList.remove('hidden');
+    els.countdown.classList.add('done');
+    // Say how late. Someone returning to a CLOSE that fired twenty minutes ago
+    // has an overexposed frame and needs to know that, not a reassuring word.
+    els.countdown.textContent = lateBy > 2
+      ? 'CLOSE — ' + formatSeconds(lateBy) + ' ago'
+      : 'CLOSE';
+    if (navigator.vibrate) navigator.vibrate([200, 100, 200]);
+  }
+
+  function tick() {
+    if (!timer) return;
+    const left = (timer.endsAt - Date.now()) / 1000;
+    if (left <= 0) { fireAlarm(timer.endsAt); return; }
+    els.countdown.textContent = left >= 60 ? formatSeconds(left) : left.toFixed(1);
+    timer.raf = requestAnimationFrame(tick);
+  }
+
+  function armAlarm() {
+    const delay = timer.endsAt - Date.now();
+    timer.alarm = setTimeout(
+      delay > MAX_TIMEOUT ? armAlarm : () => fireAlarm(timer.endsAt),
+      Math.max(0, Math.min(delay, MAX_TIMEOUT)),
+    );
+  }
+
+  function startTimer(endsAt) {
+    clearTimer();
+    timer = { endsAt, raf: 0, alarm: 0 };
+    armAlarm();
+    saveTimer();
+    els.timerBtn.textContent = 'Cancel';
+    els.timerBtn.classList.add('running');
+    els.countdown.classList.remove('hidden', 'done');
+    tick();
+  }
+
   els.timerBtn.addEventListener('click', () => {
     if (timer) { stopTimer(); return; }
     const r = compute();
     if (!r) return;
-
-    timer = { endsAt: performance.now() + r.final * 1000, raf: 0 };
-    els.timerBtn.textContent = 'Cancel';
-    els.timerBtn.classList.add('running');
-    els.countdown.classList.remove('hidden', 'done');
-
-    const tick = () => {
-      const left = (timer.endsAt - performance.now()) / 1000;
-      if (left <= 0) {
-        els.countdown.textContent = 'CLOSE';
-        els.countdown.classList.add('done');
-        els.timerBtn.textContent = 'Start timer';
-        els.timerBtn.classList.remove('running');
-        if (navigator.vibrate) navigator.vibrate([200, 100, 200]);
-        timer = null;
-        return;
-      }
-      els.countdown.textContent = left >= 60 ? formatSeconds(left) : left.toFixed(1);
-      timer.raf = requestAnimationFrame(tick);
-    };
-    tick();
+    startTimer(Date.now() + r.final * 1000);
   });
 
   // ── Wiring ──────────────────────────────────────────────────────────────
-  function wireSegments(container, onPick) {
+  // Mode switching lives in named functions rather than inline in the click
+  // handler, because restoring a saved state has to drive exactly the same
+  // transition a tap does — including which segment button looks active.
+  function setActive(container, mode) {
+    container.querySelectorAll('.seg-btn')
+      .forEach((b) => b.classList.toggle('active', b.dataset.mode === mode));
+  }
+
+  function applyFMode(mode) {
+    fMode = mode;
+    setActive(els.fMode, mode);
+    els.directPane.classList.toggle('hidden', mode !== 'direct');
+    els.derivePane.classList.toggle('hidden', mode !== 'derive');
+  }
+
+  function applyRecipMode(mode) {
+    recipMode = mode;
+    setActive(els.recipMode, mode);
+    els.pairPane.classList.toggle('hidden', mode !== 'pair');
+    els.expoPane.classList.toggle('hidden', mode !== 'expo');
+    els.nonePane.classList.toggle('hidden', mode !== 'none');
+  }
+
+  function wireSegments(container, apply) {
     container.addEventListener('click', (e) => {
       const btn = e.target.closest('.seg-btn');
       if (!btn) return;
-      container.querySelectorAll('.seg-btn').forEach((b) => b.classList.toggle('active', b === btn));
-      onPick(btn.dataset.mode);
+      apply(btn.dataset.mode);
       render();
     });
   }
 
-  wireSegments(els.fMode, (mode) => {
-    fMode = mode;
-    els.directPane.classList.toggle('hidden', mode !== 'direct');
-    els.derivePane.classList.toggle('hidden', mode !== 'derive');
-  });
+  wireSegments(els.fMode, applyFMode);
+  wireSegments(els.recipMode, applyRecipMode);
 
-  wireSegments(els.recipMode, (mode) => {
-    recipMode = mode;
-    els.pairPane.classList.toggle('hidden', mode !== 'pair');
-    els.expoPane.classList.toggle('hidden', mode !== 'expo');
-    els.nonePane.classList.toggle('hidden', mode !== 'none');
-  });
-
-  ['shutter','baseAperture','meterIso','targetF','focal','diameter',
-   'mediumIso','pairFrom','pairTo','expo','filter'].forEach((k) => {
+  Object.values(FIELDS).forEach((k) => {
     els[k].addEventListener('input', render);
     els[k].addEventListener('change', render);
   });
 
+  // Hidden means "about to be discarded" on a phone. Save, and let the timer
+  // catch up the moment the screen comes back.
+  document.addEventListener('visibilitychange', () => {
+    if (document.hidden) { persistNow(); return; }
+    if (!timer) return;
+    if (Date.now() >= timer.endsAt) { fireAlarm(timer.endsAt); return; }
+    cancelAnimationFrame(timer.raf);   // rAF was paused while hidden
+    tick();
+  });
+  window.addEventListener('pagehide', persistNow);
+
+  // Restore before the first render, never after: render() persists, so the
+  // order here is what stops a fresh page from overwriting a saved setup with
+  // its own defaults. The hash wins over storage — an explicit link someone
+  // was handed should beat whatever this browser happens to remember.
+  applyState(readHash() || loadLocal());
   render();
+
+  // A discarded tab loses the countdown along with everything else, so bring
+  // a running exposure back with it.
+  (() => {
+    let endsAt = 0;
+    try { endsAt = Number(localStorage.getItem(TIMER_KEY)); } catch (err) { return; }
+    if (!endsAt) return;
+    if (Date.now() < endsAt) { startTimer(endsAt); return; }
+    // It finished while we were gone. Worth reporting only if it was recent —
+    // an hour-old alarm is history, not news.
+    if (Date.now() - endsAt < 3600e3) fireAlarm(endsAt);
+    else { try { localStorage.removeItem(TIMER_KEY); } catch (err) { /* nothing to do */ } }
+  })();
 })();
 
 </script>
 </body>
 </html>
-
