@@ -149,6 +149,16 @@ select:focus, input:focus { outline: none; border-color: var(--brass); }
 }
 .countdown.done { color: var(--warn); }
 
+/* Says out loud whether the screen is being held awake, because the browser
+   decides that and we have no business guessing on the photographer's behalf. */
+.wake-note {
+  font-size: 0.75rem;
+  color: var(--dim);
+  margin-top: 0.5rem;
+  min-height: 1.1em;
+}
+.wake-note.warn { color: var(--warn); }
+
 /* ── Working ────────────────────────────────────────────────────── */
 .working summary {
   cursor: pointer;
@@ -317,6 +327,7 @@ footer p { font-size: 0.72rem; color: var(--dim); }
 
     <button type="button" id="timerBtn" class="timer-btn">Start timer</button>
     <div class="countdown hidden" id="countdown">0.0</div>
+    <p class="wake-note" id="wakeNote"></p>
   </section>
 
   <!-- ── Show the working ────────────────────────────────────────── -->
@@ -374,7 +385,7 @@ footer p { font-size: 0.72rem; color: var(--dim); }
   ['shutter','baseAperture','meterIso','targetF','focal','diameter','derivedF',
    'mediumIso','isoNote','pairFrom','pairTo','derivedP','expo','filter',
    'answer','answerNote','steps','directPane','derivePane','fMode',
-   'recipMode','pairPane','expoPane','nonePane','timerBtn','countdown']
+   'recipMode','pairPane','expoPane','nonePane','timerBtn','countdown','wakeNote']
     .forEach((k) => { els[k] = $(k); });
 
   let fMode = 'direct';
@@ -630,6 +641,80 @@ footer p { font-size: 0.72rem; color: var(--dim); }
   // An OS can still freeze a hidden tab outright, so lateness stays possible
   // and the display SAYS SO rather than pretending. Keeping the screen awake
   // is what prevents it, and that is a separate piece of work.
+  // ── Screen wake lock ────────────────────────────────────────────────────
+  // This is load-bearing, not a convenience. The Vibration API spec is blunt:
+  // "If the document's visibility state is not visible, then return false and
+  // terminate these steps." So the alarm can fire perfectly and still never
+  // reach a person whose phone has gone dark. Holding the screen awake is the
+  // only thing that carries the buzz to a human. (2026-08-18)
+  //
+  // Two limits come straight from the Screen Wake Lock spec:
+  //   - it requires a secure context, so https is guaranteed and file:// is at
+  //     each browser's discretion. That is exactly why the state is DISPLAYED
+  //     rather than assumed — the phone in your hand answers the question, and
+  //     nobody has to take our word for iOS.
+  //   - it is released automatically the instant the document hides, and
+  //     cannot be requested while hidden. Re-acquiring on visibilitychange is
+  //     therefore mandatory, not defensive.
+  //
+  // The third limit is just physics: you cannot hold a screen on for a 67-hour
+  // pinhole exposure. Past the ceiling we deliberately do not try — and we say
+  // so, with the wall-clock time to set a real alarm for. Quietly doing
+  // nothing there is what costs somebody a frame.
+  const WAKE_LOCK_CEILING_S = 15 * 60;   // roughly "am I standing here for this?"
+
+  let wakeLock = null;
+  let wakeWanted = false;
+
+  // A time to set an alarm for. Long exposures cross midnight, so name the day
+  // when it isn't today — "expose until 04:30" is a trap otherwise.
+  function clockAt(epochMs) {
+    const end = new Date(epochMs);
+    const time = end.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    if (end.toDateString() === new Date().toDateString()) return time;
+    return time + ' on ' + end.toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric' });
+  }
+
+  function showWakeState() {
+    const note = els.wakeNote;
+    if (!timer) { note.textContent = ''; note.classList.remove('warn'); return; }
+    const at = clockAt(timer.endsAt);
+    if (!wakeWanted) {
+      note.textContent = 'Too long to hold the screen on — set a phone alarm for ' + at + '.';
+      note.classList.add('warn');
+    } else if (wakeLock) {
+      note.textContent = 'Screen kept awake.';
+      note.classList.remove('warn');
+    } else {
+      // Either the browser refused, or it is still thinking. Either way, do not
+      // let anyone believe in a buzz that cannot come.
+      note.textContent = "Screen may sleep, so your phone won't buzz — set an alarm for " + at + '.';
+      note.classList.add('warn');
+    }
+  }
+
+  async function acquireWakeLock() {
+    if (!wakeWanted || wakeLock || !('wakeLock' in navigator)) { showWakeState(); return; }
+    try {
+      wakeLock = await navigator.wakeLock.request('screen');
+      // Fires on release by the system too — battery saver, or the tab hiding.
+      wakeLock.addEventListener('release', () => { wakeLock = null; showWakeState(); });
+    } catch (err) {
+      wakeLock = null;   // insecure context, denied, or unsupported
+    }
+    showWakeState();
+  }
+
+  function releaseWakeLock() {
+    wakeWanted = false;
+    if (wakeLock) {
+      const held = wakeLock;
+      wakeLock = null;
+      held.release().catch(() => { /* already gone */ });
+    }
+    showWakeState();
+  }
+
   const TIMER_KEY = STORE_KEY + '/timer';
   // setTimeout overflows past 2^31-1 ms (~24.8 days) and fires immediately.
   // Not hypothetical for this tool — it produced a 34-year exposure on 08-17.
@@ -652,6 +737,7 @@ footer p { font-size: 0.72rem; color: var(--dim); }
 
   function stopTimer() {
     clearTimer();
+    releaseWakeLock();
     els.timerBtn.textContent = 'Start timer';
     els.timerBtn.classList.remove('running');
     els.countdown.classList.add('hidden');
@@ -661,6 +747,7 @@ footer p { font-size: 0.72rem; color: var(--dim); }
   function fireAlarm(endsAt) {
     const lateBy = (Date.now() - endsAt) / 1000;
     clearTimer();
+    releaseWakeLock();
     els.timerBtn.textContent = 'Start timer';
     els.timerBtn.classList.remove('running');
     els.countdown.classList.remove('hidden');
@@ -697,6 +784,11 @@ footer p { font-size: 0.72rem; color: var(--dim); }
     els.timerBtn.textContent = 'Cancel';
     els.timerBtn.classList.add('running');
     els.countdown.classList.remove('hidden', 'done');
+    // Decided from the time REMAINING, so a long exposure restored from a
+    // reload is judged on what is left of it, not on what it started as.
+    wakeWanted = (endsAt - Date.now()) / 1000 <= WAKE_LOCK_CEILING_S;
+    showWakeState();       // say something now; the request resolves later
+    acquireWakeLock();
     tick();
   }
 
@@ -756,6 +848,7 @@ footer p { font-size: 0.72rem; color: var(--dim); }
     if (Date.now() >= timer.endsAt) { fireAlarm(timer.endsAt); return; }
     cancelAnimationFrame(timer.raf);   // rAF was paused while hidden
     tick();
+    acquireWakeLock();                 // the spec dropped it when we hid
   });
   window.addEventListener('pagehide', persistNow);
 
