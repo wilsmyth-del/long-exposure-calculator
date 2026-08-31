@@ -4,6 +4,8 @@ A compact, mobile-friendly exposure calculator for pinhole photography and other
 
 **[Open the calculator](https://wilsmyth-del.github.io/long-exposure-calculator/)**
 
+No account or installation is required.
+
 ## Features
 
 - Converts a metered shutter speed and aperture to the camera's actual aperture.
